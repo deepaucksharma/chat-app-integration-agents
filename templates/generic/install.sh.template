@@ -1,0 +1,93 @@
+#!/bin/bash
+set -e
+
+# Display banner
+echo "======================================================"
+echo "    New Relic {{integration_name}} Integration Installer"
+echo "======================================================"
+
+# Setup variables
+NEW_RELIC_LICENSE_KEY={{license_key}}
+
+echo "Installing New Relic {{integration_name}} integration..."
+
+# Update package lists
+{{#if debian_based}}
+echo "Updating package lists..."
+apt-get update
+
+# Install dependencies
+echo "Installing dependencies..."
+DEBIAN_FRONTEND=noninteractive apt-get install -y curl gnupg2
+
+# Add New Relic repository
+echo "Adding New Relic repository..."
+curl -s https://download.newrelic.com/infrastructure_agent/gpg/newrelic-infra.gpg | apt-key add -
+echo "deb https://download.newrelic.com/infrastructure_agent/linux/apt focal main" > /etc/apt/sources.list.d/newrelic-infra.list
+apt-get update
+
+# Install New Relic Infrastructure agent
+echo "Installing New Relic Infrastructure agent..."
+DEBIAN_FRONTEND=noninteractive apt-get install -y newrelic-infra
+
+# Install integration package
+echo "Installing {{integration_name}} integration package..."
+DEBIAN_FRONTEND=noninteractive apt-get install -y nri-{{integration_name}}
+{{else}}
+echo "Updating package repositories..."
+yum clean all
+yum check-update -y
+
+# Install dependencies
+echo "Installing dependencies..."
+yum install -y curl
+
+# Add New Relic repository
+echo "Adding New Relic repository..."
+curl -o /etc/yum.repos.d/newrelic-infra.repo https://download.newrelic.com/infrastructure_agent/linux/yum/el/7/x86_64/newrelic-infra.repo
+yum clean all
+yum check-update -y
+
+# Install New Relic Infrastructure agent
+echo "Installing New Relic Infrastructure agent..."
+yum install -y newrelic-infra
+
+# Install integration package
+echo "Installing {{integration_name}} integration package..."
+yum install -y nri-{{integration_name}}
+{{/if}}
+
+# Configure New Relic license key
+echo "Configuring New Relic license key..."
+echo "license_key: ${NEW_RELIC_LICENSE_KEY}" > /etc/newrelic-infra/newrelic-infra.yml
+
+# Configure integration
+echo "Configuring {{integration_name}} integration..."
+mkdir -p /etc/newrelic-infra/integrations.d/
+
+cat > /etc/newrelic-infra/integrations.d/{{integration_name}}-config.yml << EOL
+integration_name: com.newrelic.{{integration_name}}
+
+instances:
+  - name: {{integration_name}}-metrics
+    command: metrics
+    arguments:
+      # Add your configuration parameters here
+      
+  - name: {{integration_name}}-inventory
+    command: inventory
+    arguments:
+      # Add your configuration parameters here
+EOL
+
+# Start New Relic Infrastructure agent
+echo "Starting New Relic Infrastructure agent..."
+{{#if debian_based}}
+systemctl enable newrelic-infra
+systemctl restart newrelic-infra
+{{else}}
+systemctl enable newrelic-infra
+systemctl restart newrelic-infra
+{{/if}}
+
+echo "Installation complete! {{integration_name}} metrics should start appearing in New Relic within a few minutes."

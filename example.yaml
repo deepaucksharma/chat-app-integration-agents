@@ -1,0 +1,56 @@
+# New Relic Integration System Configuration
+
+# License key
+license_key: "YOUR_LICENSE_KEY_HERE"
+
+# Elasticsearch (for document retrieval)
+elasticsearch:
+  url: "http://localhost:9200"
+  index: "newrelic_docs"
+  username: "elastic"
+  password: "changeme"
+
+# Docker Configuration
+docker:
+  poolSize: 5
+  defaultImage: "ubuntu:22.04"
+
+# Embeddings Configuration
+embeddings:
+  model: "text-embedding-3-small"
+
+# Documentation Settings
+documentation:
+  baseUrl: "https://docs.newrelic.com/docs/integrations"
+  cacheDir: "./cache/docs"
+  cacheTtl: 86400000  # 24 hours
+
+# Execution Settings
+execution:
+  scriptDir: "./tmp/scripts"
+  timeout: 300  # 5 minutes
+
+# Template Settings
+templates:
+  dir: "./templates"
+  cacheSize: 100
+
+# Logging
+logging:
+  level: "info"
+  file: "./logs/newrelic-installer.log"
+
+# Integration-specific defaults
+integrations:
+  mysql:
+    host: "localhost"
+    port: 3306
+    user: "newrelic"
+    database: "information_schema"
+    
+  nginx:
+    status_url: "http://localhost/status"
+    
+  redis:
+    host: "localhost"
+    port: 6379

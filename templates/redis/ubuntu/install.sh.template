@@ -1,0 +1,91 @@
+#!/bin/bash
+set -e
+
+# Display banner
+echo "======================================================"
+echo "       New Relic Redis Integration Installer"
+echo "======================================================"
+
+# Setup variables
+REDIS_HOST={{redis_host}}
+REDIS_PORT={{redis_port}}
+{{#if redis_password}}
+REDIS_PASSWORD={{redis_password}}
+{{/if}}
+NEW_RELIC_LICENSE_KEY={{license_key}}
+
+echo "Installing New Relic Redis integration on Ubuntu..."
+
+# Update package lists
+echo "Updating package lists..."
+apt-get update
+
+# Install dependencies
+echo "Installing dependencies..."
+DEBIAN_FRONTEND=noninteractive apt-get install -y curl gnupg2 redis-tools
+
+# Add New Relic repository
+echo "Adding New Relic repository..."
+curl -s https://download.newrelic.com/infrastructure_agent/gpg/newrelic-infra.gpg | apt-key add -
+echo "deb https://download.newrelic.com/infrastructure_agent/linux/apt focal main" > /etc/apt/sources.list.d/newrelic-infra.list
+apt-get update
+
+# Install New Relic Infrastructure agent
+echo "Installing New Relic Infrastructure agent..."
+DEBIAN_FRONTEND=noninteractive apt-get install -y newrelic-infra
+
+# Configure New Relic license key
+echo "Configuring New Relic license key..."
+echo "license_key: ${NEW_RELIC_LICENSE_KEY}" > /etc/newrelic-infra/newrelic-infra.yml
+
+# Install Redis integration
+echo "Installing Redis integration package..."
+DEBIAN_FRONTEND=noninteractive apt-get install -y nri-redis
+
+# Configure Redis integration
+echo "Configuring Redis integration..."
+mkdir -p /etc/newrelic-infra/integrations.d/
+
+cat > /etc/newrelic-infra/integrations.d/redis-config.yml << EOL
+integration_name: com.newrelic.redis
+
+instances:
+  - name: redis-metrics
+    command: metrics
+    arguments:
+      hostname: ${REDIS_HOST}
+      port: ${REDIS_PORT}
+{{#if redis_password}}
+      password: ${REDIS_PASSWORD}
+{{/if}}
+      keys_limit: 30
+      
+  - name: redis-inventory
+    command: inventory
+    arguments:
+      hostname: ${REDIS_HOST}
+      port: ${REDIS_PORT}
+{{#if redis_password}}
+      password: ${REDIS_PASSWORD}
+{{/if}}
+EOL
+
+# Start New Relic Infrastructure agent
+echo "Starting New Relic Infrastructure agent..."
+systemctl enable newrelic-infra
+systemctl restart newrelic-infra
+
+# Verify Redis connection
+echo "Verifying Redis connection..."
+{{#if redis_password}}
+if redis-cli -h ${REDIS_HOST} -p ${REDIS_PORT} -a ${REDIS_PASSWORD} ping | grep -q "PONG"; then
+{{else}}
+if redis-cli -h ${REDIS_HOST} -p ${REDIS_PORT} ping | grep -q "PONG"; then
+{{/if}}
+  echo "Redis connection successful!"
+else
+  echo "Failed to connect to Redis!"
+  exit 1
+fi
+
+echo "Installation complete! Redis metrics should start appearing in New Relic within a few minutes."

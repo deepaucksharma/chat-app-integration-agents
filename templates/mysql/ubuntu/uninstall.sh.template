@@ -1,0 +1,34 @@
+#!/bin/bash
+set -e
+
+# Display banner
+echo "======================================================"
+echo "    New Relic MySQL Integration Uninstaller"
+echo "======================================================"
+
+echo "Uninstalling New Relic MySQL integration from Ubuntu..."
+
+# Stop the agent if it's running
+echo "Stopping New Relic Infrastructure agent..."
+systemctl stop newrelic-infra || true
+
+# Remove MySQL integration package
+echo "Removing MySQL integration package..."
+apt-get remove -y nri-mysql || true
+
+# Remove MySQL integration configuration
+echo "Removing MySQL integration configuration..."
+rm -f /etc/newrelic-infra/integrations.d/mysql-config.yml
+
+# Check if other integrations are installed
+if [ -z "$(ls -A /etc/newrelic-infra/integrations.d/ 2>/dev/null)" ] && [ -z "$(dpkg -l | grep nri- | grep -v nri-mysql)" ]; then
+  echo "No other integrations found. Removing New Relic Infrastructure agent..."
+  apt-get remove -y newrelic-infra || true
+  rm -f /etc/apt/sources.list.d/newrelic-infra.list
+else
+  echo "Other integrations found. Keeping New Relic Infrastructure agent."
+  # Restart the agent if we're keeping it
+  systemctl start newrelic-infra || true
+fi
+
+echo "Uninstallation complete! New Relic MySQL integration has been removed."

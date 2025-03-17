@@ -1,0 +1,80 @@
+#!/bin/bash
+set -e
+
+# Display banner
+echo "======================================================"
+echo "       New Relic Nginx Integration Installer"
+echo "======================================================"
+
+# Setup variables
+NGINX_STATUS_URL={{nginx_status_url}}
+NEW_RELIC_LICENSE_KEY={{license_key}}
+
+echo "Installing New Relic Nginx integration on Ubuntu..."
+
+# Update package lists
+echo "Updating package lists..."
+apt-get update
+
+# Install dependencies
+echo "Installing dependencies..."
+DEBIAN_FRONTEND=noninteractive apt-get install -y curl gnupg2
+
+# Add New Relic repository
+echo "Adding New Relic repository..."
+curl -s https://download.newrelic.com/infrastructure_agent/gpg/newrelic-infra.gpg | apt-key add -
+echo "deb https://download.newrelic.com/infrastructure_agent/linux/apt focal main" > /etc/apt/sources.list.d/newrelic-infra.list
+apt-get update
+
+# Install New Relic Infrastructure agent
+echo "Installing New Relic Infrastructure agent..."
+DEBIAN_FRONTEND=noninteractive apt-get install -y newrelic-infra
+
+# Configure New Relic license key
+echo "Configuring New Relic license key..."
+echo "license_key: ${NEW_RELIC_LICENSE_KEY}" > /etc/newrelic-infra/newrelic-infra.yml
+
+# Install Nginx integration
+echo "Installing Nginx integration package..."
+DEBIAN_FRONTEND=noninteractive apt-get install -y nri-nginx
+
+# Configure Nginx integration
+echo "Configuring Nginx integration..."
+mkdir -p /etc/newrelic-infra/integrations.d/
+
+cat > /etc/newrelic-infra/integrations.d/nginx-config.yml << EOL
+integration_name: com.newrelic.nginx
+
+instances:
+  - name: nginx-server
+    command: metrics
+    arguments:
+      status_url: ${NGINX_STATUS_URL}
+      validate_certs: true
+
+  - name: nginx-server-inventory
+    command: inventory
+    arguments:
+      config_path: /etc/nginx/nginx.conf
+EOL
+
+# Start New Relic Infrastructure agent
+echo "Starting New Relic Infrastructure agent..."
+systemctl enable newrelic-infra
+systemctl restart newrelic-infra
+
+# Verify Nginx status URL
+echo "Verifying Nginx status URL..."
+if curl -s ${NGINX_STATUS_URL} > /dev/null; then
+  echo "Nginx status URL connection successful!"
+else
+  echo "Warning: Could not connect to Nginx status URL. You may need to configure Nginx to expose its status page."
+  echo "Add the following to your Nginx server block:"
+  echo "    location /nginx_status {"
+  echo "        stub_status on;"
+  echo "        allow 127.0.0.1;"
+  echo "        deny all;"
+  echo "    }"
+fi
+
+echo "Installation complete! Nginx metrics should start appearing in New Relic within a few minutes."

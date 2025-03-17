@@ -1,0 +1,55 @@
+#!/bin/bash
+set -e
+
+# Display banner
+echo "======================================================"
+echo "  New Relic {{integration_name}} Integration Uninstaller"
+echo "======================================================"
+
+echo "Uninstalling New Relic {{integration_name}} integration..."
+
+# Stop the agent if it's running
+echo "Stopping New Relic Infrastructure agent..."
+systemctl stop newrelic-infra || true
+
+{{#if debian_based}}
+# Remove integration package
+echo "Removing {{integration_name}} integration package..."
+apt-get remove -y nri-{{integration_name}} || true
+
+# Remove integration configuration
+echo "Removing {{integration_name}} integration configuration..."
+rm -f /etc/newrelic-infra/integrations.d/{{integration_name}}-config.yml
+
+# Check if other integrations are installed
+if [ -z "$(ls -A /etc/newrelic-infra/integrations.d/ 2>/dev/null)" ] && [ -z "$(dpkg -l | grep nri- | grep -v nri-{{integration_name}})" ]; then
+  echo "No other integrations found. Removing New Relic Infrastructure agent..."
+  apt-get remove -y newrelic-infra || true
+  rm -f /etc/apt/sources.list.d/newrelic-infra.list
+else
+  echo "Other integrations found. Keeping New Relic Infrastructure agent."
+  # Restart the agent if we're keeping it
+  systemctl start newrelic-infra || true
+fi
+{{else}}
+# Remove integration package
+echo "Removing {{integration_name}} integration package..."
+yum remove -y nri-{{integration_name}} || true
+
+# Remove integration configuration
+echo "Removing {{integration_name}} integration configuration..."
+rm -f /etc/newrelic-infra/integrations.d/{{integration_name}}-config.yml
+
+# Check if other integrations are installed
+if [ -z "$(ls -A /etc/newrelic-infra/integrations.d/ 2>/dev/null)" ] && [ -z "$(rpm -qa | grep nri- | grep -v nri-{{integration_name}})" ]; then
+  echo "No other integrations found. Removing New Relic Infrastructure agent..."
+  yum remove -y newrelic-infra || true
+  rm -f /etc/yum.repos.d/newrelic-infra.repo
+else
+  echo "Other integrations found. Keeping New Relic Infrastructure agent."
+  # Restart the agent if we're keeping it
+  systemctl start newrelic-infra || true
+fi
+{{/if}}
+
+echo "Uninstallation complete! New Relic {{integration_name}} integration has been removed."

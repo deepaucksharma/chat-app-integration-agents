@@ -1,0 +1,96 @@
+#!/bin/bash
+set -e
+
+# Display banner
+echo "======================================================"
+echo "   New Relic Elasticsearch Integration Installer"
+echo "======================================================"
+
+# Setup variables
+ES_HOST={{elasticsearch_host}}
+ES_PORT={{elasticsearch_port}}
+{{#if elasticsearch_username}}
+ES_USERNAME={{elasticsearch_username}}
+ES_PASSWORD={{elasticsearch_password}}
+{{/if}}
+NEW_RELIC_LICENSE_KEY={{license_key}}
+
+echo "Installing New Relic Elasticsearch integration on Ubuntu..."
+
+# Update package lists
+echo "Updating package lists..."
+apt-get update
+
+# Install dependencies
+echo "Installing dependencies..."
+DEBIAN_FRONTEND=noninteractive apt-get install -y curl gnupg2 jq
+
+# Add New Relic repository
+echo "Adding New Relic repository..."
+curl -s https://download.newrelic.com/infrastructure_agent/gpg/newrelic-infra.gpg | apt-key add -
+echo "deb https://download.newrelic.com/infrastructure_agent/linux/apt focal main" > /etc/apt/sources.list.d/newrelic-infra.list
+apt-get update
+
+# Install New Relic Infrastructure agent
+echo "Installing New Relic Infrastructure agent..."
+DEBIAN_FRONTEND=noninteractive apt-get install -y newrelic-infra
+
+# Configure New Relic license key
+echo "Configuring New Relic license key..."
+echo "license_key: ${NEW_RELIC_LICENSE_KEY}" > /etc/newrelic-infra/newrelic-infra.yml
+
+# Install Elasticsearch integration
+echo "Installing Elasticsearch integration package..."
+DEBIAN_FRONTEND=noninteractive apt-get install -y nri-elasticsearch
+
+# Configure Elasticsearch integration
+echo "Configuring Elasticsearch integration..."
+mkdir -p /etc/newrelic-infra/integrations.d/
+
+cat > /etc/newrelic-infra/integrations.d/elasticsearch-config.yml << EOL
+integration_name: com.newrelic.elasticsearch
+
+instances:
+  - name: elasticsearch-metrics
+    command: metrics
+    arguments:
+      hostname: ${ES_HOST}
+      port: ${ES_PORT}
+{{#if elasticsearch_username}}
+      username: ${ES_USERNAME}
+      password: ${ES_PASSWORD}
+{{/if}}
+      use_ssl: {{#if use_ssl}}true{{else}}false{{/if}}
+      
+  - name: elasticsearch-inventory
+    command: inventory
+    arguments:
+      hostname: ${ES_HOST}
+      port: ${ES_PORT}
+{{#if elasticsearch_username}}
+      username: ${ES_USERNAME}
+      password: ${ES_PASSWORD}
+{{/if}}
+      use_ssl: {{#if use_ssl}}true{{else}}false{{/if}}
+EOL
+
+# Start New Relic Infrastructure agent
+echo "Starting New Relic Infrastructure agent..."
+systemctl enable newrelic-infra
+systemctl restart newrelic-infra
+
+# Verify Elasticsearch connection
+echo "Verifying Elasticsearch connection..."
+{{#if elasticsearch_username}}
+AUTH_HEADER="Authorization: Basic $(echo -n ${ES_USERNAME}:${ES_PASSWORD} | base64)"
+if curl -s -o /dev/null -w "%{http_code}" -H "${AUTH_HEADER}" http://${ES_HOST}:${ES_PORT} | grep -q "200"; then
+{{else}}
+if curl -s -o /dev/null -w "%{http_code}" http://${ES_HOST}:${ES_PORT} | grep -q "200"; then
+{{/if}}
+  echo "Elasticsearch connection successful!"
+else
+  echo "Failed to connect to Elasticsearch!"
+  exit 1
+fi
+
+echo "Installation complete! Elasticsearch metrics should start appearing in New Relic within a few minutes."

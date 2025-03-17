@@ -1,0 +1,86 @@
+#!/bin/bash
+set -e
+
+# Display banner
+echo "======================================================"
+echo "       New Relic MySQL Integration Installer"
+echo "======================================================"
+
+# Setup variables
+MYSQL_HOST={{mysql_host}}
+MYSQL_PORT={{mysql_port}}
+MYSQL_USER={{mysql_user}}
+MYSQL_PASSWORD={{mysql_password}}
+NEW_RELIC_LICENSE_KEY={{license_key}}
+
+echo "Installing New Relic MySQL integration on RHEL/CentOS..."
+
+# Update package lists
+echo "Updating package repositories..."
+yum clean all
+yum check-update -y
+
+# Install dependencies
+echo "Installing dependencies..."
+yum install -y curl mysql
+
+# Add New Relic repository
+echo "Adding New Relic repository..."
+curl -o /etc/yum.repos.d/newrelic-infra.repo https://download.newrelic.com/infrastructure_agent/linux/yum/el/7/x86_64/newrelic-infra.repo
+yum clean all
+yum check-update -y
+
+# Install New Relic Infrastructure agent
+echo "Installing New Relic Infrastructure agent..."
+yum install -y newrelic-infra
+
+# Configure New Relic license key
+echo "Configuring New Relic license key..."
+echo "license_key: ${NEW_RELIC_LICENSE_KEY}" > /etc/newrelic-infra/newrelic-infra.yml
+
+# Install MySQL integration
+echo "Installing MySQL integration package..."
+yum install -y nri-mysql
+
+# Configure MySQL integration
+echo "Configuring MySQL integration..."
+mkdir -p /etc/newrelic-infra/integrations.d/
+
+cat > /etc/newrelic-infra/integrations.d/mysql-config.yml << EOL
+integration_name: com.newrelic.mysql
+
+instances:
+  - name: mysql-metrics
+    command: metrics
+    arguments:
+      hostname: ${MYSQL_HOST}
+      port: ${MYSQL_PORT}
+      username: ${MYSQL_USER}
+      password: ${MYSQL_PASSWORD}
+      database: information_schema
+
+  - name: mysql-inventory
+    command: inventory
+    arguments:
+      hostname: ${MYSQL_HOST}
+      port: ${MYSQL_PORT}
+      username: ${MYSQL_USER}
+      password: ${MYSQL_PASSWORD}
+      database: information_schema
+EOL
+
+# Start New Relic Infrastructure agent
+echo "Starting New Relic Infrastructure agent..."
+systemctl enable newrelic-infra
+systemctl restart newrelic-infra
+
+# Verify MySQL connection
+echo "Verifying MySQL connection..."
+if mysql -h ${MYSQL_HOST} -P ${MYSQL_PORT} -u ${MYSQL_USER} -p${MYSQL_PASSWORD} -e "SELECT 1" > /dev/null; then
+  echo "MySQL connection successful!"
+else
+  echo "Failed to connect to MySQL!"
+  exit 1
+fi
+
+echo "Installation complete! MySQL metrics should start appearing in New Relic within a few minutes."
