@@ -1,10 +1,10 @@
 export interface Document {
-  id: string;
+  id?: string;
   content: string;
-  metadata: Record<string, any>;
+  metadata?: Record<string, any>;
 }
 
-export interface Retriever {
-  retrieve(query: string, config: Record<string, any>): Promise<Document[]>;
-  addDocuments(docs: Document[], config: Record<string, any>): Promise<void>;
+export interface Retriever<T = Document> {
+  retrieve(query: string, config?: Record<string, any>): Promise<T[]>;
+  addDocuments(docs: T[], config?: Record<string, any>): Promise<void>;
 }

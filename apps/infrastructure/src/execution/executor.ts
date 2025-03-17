@@ -1,190 +1,276 @@
-import * as os from 'os';
+import * as fs from 'fs/promises';
 import * as path from 'path';
-import * as fs from 'fs';
-import { 
-  Container,
-  ExecutionResult,
-  Executor,
-  VerificationCheck,
-  VerificationResult
-} from '@core/interfaces/execution';
-import { maskSensitiveData } from '@core/utils/security';
+import * as os from 'os';
+import { Executor, Container } from '@core/interfaces/execution';
+import { ContainerProvider } from '@core/interfaces/container';
+import { ExecutionError } from '@core/utils/error-handling';
+import { maskSensitiveData, scanScriptForVulnerabilities } from '@core/utils/security';
 import { logger } from '@core/utils/logging';
 import { withErrorHandling } from '@core/utils/error-handling';
 
+interface ExecutorOptions {
+  scriptDir?: string;
+  defaultTimeout?: number;
+}
+
 export class DockerExecutor implements Executor {
+  private containerProvider: ContainerProvider;
   private scriptDir: string;
-  private sensitiveKeys: string[];
+  private defaultTimeout: number;
   
-  constructor(options: { scriptDir?: string, sensitiveKeys?: string[] } = {}) {
-    this.scriptDir = options.scriptDir || os.tmpdir();
-    this.sensitiveKeys = options.sensitiveKeys || [
-      'license_key', 'api_key', 'token', 'password', 
-      'secret', 'credential', 'auth', 'key', 'cert'
-    ];
+  constructor(
+    containerProvider: ContainerProvider,
+    options: ExecutorOptions = {}
+  ) {
+    this.containerProvider = containerProvider;
+    this.scriptDir = options.scriptDir || './scripts';
+    this.defaultTimeout = options.defaultTimeout || 300; // 5 minutes
     
     // Ensure script directory exists
-    if (!fs.existsSync(this.scriptDir)) {
-      fs.mkdirSync(this.scriptDir, { recursive: true });
-    }
+    fs.mkdir(this.scriptDir, { recursive: true }).catch(err => {
+      logger.error('Failed to create script directory', { error: err.message });
+    });
   }
   
   async executeScript(
-    container: Container, 
-    script: string, 
-    timeout: number = 300
-  ): Promise<ExecutionResult> {
-    try {
-      // Generate a unique script ID
-      const scriptId = `script_${Date.now()}_${Math.random().toString(36).substr(2, 5)}`;
-      const scriptPath = path.join(this.scriptDir, `${scriptId}.sh`);
-      const containerScriptPath = `/tmp/${scriptId}.sh`;
-      
-      // Write script to local file
-      fs.writeFileSync(scriptPath, script, { mode: 0o755 });
+      container: Container,
+      script: string,
+      timeout?: number
+    ): Promise<{
+      success: boolean;
+      exitCode: number;
+      output: string;
+      duration: number;
+    }> {
+      // Create a temporary file for the script
+      const tempFile = path.join(
+        os.tmpdir(),
+        `script_${Date.now()}_${Math.floor(Math.random() * 1000)}.sh`
+      );
       
       try {
-        // Copy script to container
-        await container.copyFile(scriptPath, containerScriptPath);
+        // Scan script for vulnerabilities
+        const scanResult = await scanScriptForVulnerabilities(script);
         
-        // Make script executable
-        await container.executeCommand(`chmod +x ${containerScriptPath}`);
-        
-        // Execute script
-        logger.info('Executing script in container', { scriptId, containerId: container.id });
-        const result = await container.executeCommand(containerScriptPath, { timeout });
-        
-        // Mask sensitive data in output
-        const maskedOutput = this.maskSensitiveData(result.stdout + '\\n' + result.stderr);
-        
-        return {
-          success: result.exitCode === 0,
-          exitCode: result.exitCode,
-          output: maskedOutput,
-          duration: result.duration
-        };
-      } finally {
-        // Clean up local script file
-        if (fs.existsSync(scriptPath)) {
-          fs.unlinkSync(scriptPath);
+        if (!scanResult.valid) {
+          throw new ExecutionError(`Script contains vulnerabilities: ${scanResult.issues.join(', ')}`);
         }
         
-        // Clean up container script file
+        // Write the script to the temporary file
+        await fs.writeFile(tempFile, script, { mode: 0o755 });
+        
+        // Get container ID from the container object
+        const containerId = container.id;
+        
+        // Copy the script to the container
+        const containerScriptPath = '/tmp/script.sh';
+        await this.containerProvider.copyFileToContainer(
+          containerId,
+          tempFile,
+          containerScriptPath
+        );
+        
+        // Prepare environment variables
+        // let envCommand = '';
+        // if (options.env) {
+        //   envCommand = Object.entries(options.env)
+        //     .map(([key, value]) => `export ${key}=${JSON.stringify(value)}`)
+        //     .join(' && ');
+        //
+        //   if (envCommand) {
+        //     envCommand += ' && ';
+        //   }
+        // }
+        
+        // Execute the script
+        const startTime = Date.now();
+        const { exitCode, output } = await this.containerProvider.executeCommand(
+          containerId,
+          `chmod +x ${containerScriptPath} && ${containerScriptPath}`
+        );
+        const endTime = Date.now();
+        const duration = endTime - startTime;
+        
+        // Determine success
+        const success = exitCode === 0;
+        
+        // Log the execution result
+        logger.debug('Script execution completed', {
+          success,
+          exitCode,
+          output: maskSensitiveData(output)
+        });
+        
+        return {
+          success,
+          exitCode,
+          output,
+          duration
+        };
+      } catch (error: any) {
+        logger.error('Error executing script', { error: error.message });
+        
+        throw new ExecutionError(`Failed to execute script: ${error.message}`, { cause: error });
+      } finally {
+        // Clean up temporary file
         try {
-          await container.executeCommand(`rm -f ${containerScriptPath}`);
-        } catch (error) {
-          logger.warn('Failed to remove script from container', { 
-            scriptId, 
-            containerId: container.id 
+          await fs.unlink(tempFile);
+        } catch (err) {
+          logger.warn('Failed to delete temporary script file', {
+            file: tempFile,
+            error: err.message
           });
         }
       }
-    } catch (error: any) {
-      if (error.message.includes('timed out')) {
-        return {
-          success: false,
-          exitCode: -1,
-          output: 'Script execution timed out',
-          error: `Execution timed out after ${timeout} seconds`,
-          duration: timeout * 1000
-        };
-      }
-      
-      logger.error('Error executing script', { error: error.message });
-      
-      return {
-        success: false,
-        exitCode: -1,
-        output: '',
-        error: error.message,
-        duration: 0
-      };
     }
-  }
   
   async verifyInstallation(
-    container: Container, 
-    checks: VerificationCheck[]
-  ): Promise<VerificationResult> {
-    const results: VerificationResult = {
-      success: true,
-      checks: [],
-    };
-
-    for (const check of checks) {
-      const { command, expectedExitCode, description, retryCount = 0, retryDelay = 5, timeout = 30 } = check;
+      container: Container,
+      integration: string,
+      verificationScript: string
+    ): Promise<{
+      success: boolean;
+      output: string;
+    }> {
+      // const maxRetries = options.maxRetries || 3;
+      // const retryDelay = options.retryDelay || 5000;
       
-      try {
-        const result = await withErrorHandling(
-          async () => {
-            return await container.executeCommand(command, { timeout });
-          },
-          {
-            retries: retryCount,
-            retryDelay: retryDelay * 1000,
-            errorHandler: async (error: any) => {
-              logger.warn(`Verification check failed, retrying: ${description}`, {
-                error: error.message,
-                command,
-              });
-            },
-          }
-        );
-
-        const passed = result.exitCode === expectedExitCode;
-
-        if (!passed) {
-          results.success = false;
-        }
-
-        results.checks.push({
-          description,
-          passed,
-          output: result.stdout,
-          error: passed ? undefined : result.stderr,
-        } as any);
-
-        logger.info(`Verification check ${passed ? 'passed' : 'failed'}: ${description}`, {
-          command,
-          exitCode: result.exitCode,
-          expectedExitCode,
-        });
-      } catch (error: any) {
-        results.success = false;
-
-        results.checks.push({
-          description,
-          passed: false,
-          error: error.message,
-        } as any);
-        
-        logger.error(`Verification check error: ${description}`, { 
-          error: error.message, 
-          command 
-        });
-      }
+      // return withErrorHandling(
+      //   async () => {
+      //     // Execute the verification script
+      //     const result = await this.executeScript(
+      //       verificationScript,
+      //       {
+      //         image: options.image,
+      //         timeout: options.timeout
+      //       }
+      //     );
+          
+      //     if (!result.success) {
+      //       throw new ExecutionError(`Verification failed with exit code ${result.exitCode}: ${result.output}`);
+      //     }
+          
+      //     return {
+      //       success: true,
+      //       output: result.output
+      //     };
+      //   },
+      //   {
+      //     retries: maxRetries,
+      //     retryDelay,
+      //     onError: (error, attempt) => {
+      //       logger.warn(`Verification attempt ${attempt + 1} failed`, {
+      //         integration,
+      //         error: error.message
+      //       });
+      //     },
+      //     onRetry: (attempt) => {
+      //       logger.info(`Retrying verification (${attempt}/${maxRetries})`, {
+      //         integration
+      //       });
+      //     }
+      //   }
+      // );
+      return { success: false, output: "Not implemented" };
     }
-    
-    return results;
-  }
   
   async executeRollback(
-    container: Container, 
-    script: string
-  ): Promise<boolean> {
-    try {
-      logger.info('Executing rollback script', { containerId: container.id });
-      
-      const result = await this.executeScript(container, script, 300);
-      
-      return result.success;
-    } catch (error: any) {
-      logger.error('Rollback failed', { error: error.message });
-      return false;
+      container: Container,
+      script: string
+    ): Promise<boolean> {
+      try {
+        logger.info('Executing rollback script');
+        
+        // Execute the rollback script
+        // const result = await this.executeScript(
+        //   rollbackScript,
+        //   {
+        //     image: options.image,
+        //     timeout: options.timeout
+        //   }
+        // );
+        
+        // return {
+        //   success: result.success,
+        //   output: result.output
+        // };
+        return false;
+      } catch (error: any) {
+        logger.error('Error executing rollback script', { error: error.message });
+        
+        // We don't throw here to avoid cascading failures
+        return false;
+      }
     }
-  }
   
-  private maskSensitiveData(text: string): string {
-    return maskSensitiveData(text, this.sensitiveKeys);
-  }
+  async collectDiagnostics(
+      container: Container
+    ): Promise<string> {
+      try {
+        logger.info('Collecting diagnostics');
+        
+        // Execute a diagnostics script
+        const diagnosticScript = `
+          #!/bin/bash
+          set -e
+          
+          echo "=== System Information ==="
+          uname -a
+          
+          echo "=== Distribution ==="
+          cat /etc/*-release
+          
+          echo "=== Memory ==="
+          free -h
+          
+          echo "=== Disk ==="
+          df -h
+          
+          echo "=== Installed Packages ==="
+          if command -v dpkg > /dev/null; then
+            dpkg -l | grep  || echo "Package not found"
+          elif command -v rpm > /dev/null; then
+            rpm -qa | grep  || echo "Package not found"
+          else
+            echo "Package manager not found"
+          fi
+          
+          echo "=== Services ==="
+          if command -v systemctl > /dev/null; then
+            systemctl status  || echo "Service not found"
+          elif command -v service > /dev/null; then
+            service  status || echo "Service not found"
+          else
+            echo "Service manager not found"
+          fi
+          
+          echo "=== Logs ==="
+          if [ -d /var/log/ ]; then
+            ls -la /var/log/
+            head -n 50 /var/log/*.log 2>/dev/null || echo "No log files found"
+          elif [ -f /var/log/.log ]; then
+            head -n 50 /var/log/.log
+          else
+            echo "No log files found"
+          fi
+        `;
+        
+        // const result = await this.executeScript(
+        //   diagnosticScript,
+        //   {
+        //     image: options.image,
+        //     timeout: options.timeout || 60
+        //   }
+        // );
+        const result = {success: false, exitCode: 1, output: "Not implemented", duration: 0};
+        
+        return result.output;
+      } catch (error: any) {
+        logger.error('Error collecting diagnostics', {
+          error: error.message
+        });
+        
+        return `Failed to collect diagnostics: ${error.message}`;
+      }
+    }
 }

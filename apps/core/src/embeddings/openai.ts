@@ -1,64 +1,103 @@
-import OpenAI from 'openai';
-import { EmbeddingsProvider } from '@core/interfaces/embeddings';
-import { logger } from '@core/utils/logging';
+import { EmbeddingsProvider } from '../interfaces/embeddings';
+import { EmbeddingError } from '../utils/error-handling';
+import { logger } from '../utils/logging';
+import axios from 'axios';
+
+export interface OpenAIEmbeddingsOptions {
+  apiKey?: string;
+  model?: string;
+  batchSize?: number;
+  maxRetries?: number;
+  timeout?: number;
+}
 
 export class OpenAIEmbeddingsProvider implements EmbeddingsProvider {
-  private openai: OpenAI;
-  private model: string;
+  private readonly apiKey: string;
+  private readonly model: string;
+  private readonly batchSize: number;
+  private readonly maxRetries: number;
+  private readonly timeout: number;
 
-  constructor(model: string = 'text-embedding-3-small', apiKey?: string) {
-    this.model = model;
-    this.openai = new OpenAI({
-      apiKey: apiKey || process.env.OPENAI_API_KEY,
-    });
-  }
-
-  async embedQuery(query: string): Promise<number[]> {
-    try {
-      const response = await this.openai.embeddings.create({
-        model: this.model,
-        input: query,
-      });
-
-      return response.data[0].embedding;
-    } catch (error: any) {
-      logger.error('Error creating embedding for query', {
-        error: error.message,
-      });
-
-      throw error;
+  constructor(options: OpenAIEmbeddingsOptions = {}) {
+    this.apiKey = options.apiKey || process.env.OPENAI_API_KEY || '';
+    this.model = options.model || 'text-embedding-3-small';
+    this.batchSize = options.batchSize || 1000;
+    this.maxRetries = options.maxRetries || 3;
+    this.timeout = options.timeout || 60000;
+    
+    if (!this.apiKey) {
+      throw new EmbeddingError('OpenAI API key is required. Provide it via options or OPENAI_API_KEY environment variable.');
     }
   }
 
-  async embedDocuments(documents: string[]): Promise<number[][]> {
-    try {
-      // Process in batches to avoid rate limits
-      const batchSize = 20;
-      const batches = [];
+  async embedQuery(text: string): Promise<number[]> {
+    const vectors = await this.embedDocuments([text]);
+    return vectors[0];
+  }
 
-      for (let i = 0; i < documents.length; i += batchSize) {
-        batches.push(documents.slice(i, i + batchSize));
-      }
+  async embedDocuments(texts: string[]): Promise<number[][]> {
+    const batches = this.batchTexts(texts);
+    
+    const embeddings: number[][] = [];
+    
+    for (const batch of batches) {
+      const batchEmbeddings = await this.embedBatch(batch);
+      embeddings.push(...batchEmbeddings);
+    }
+    
+    return embeddings;
+  }
 
-      const allEmbeddings: number[][] = [];
+  private batchTexts(texts: string[]): string[][] {
+    const batches: string[][] = [];
+    
+    for (let i = 0; i < texts.length; i += this.batchSize) {
+      const batch = texts.slice(i, i + this.batchSize);
+      batches.push(batch);
+    }
+    
+    return batches;
+  }
 
-      for (const batch of batches) {
-        const response = await this.openai.embeddings.create({
-          model: this.model,
-          input: batch,
+  private async embedBatch(texts: string[]): Promise<number[][]> {
+    let attempt = 0;
+    
+    while (attempt < this.maxRetries) {
+      try {
+        const response = await axios.post(
+          'https://api.openai.com/v1/embeddings',
+          {
+            model: this.model,
+            input: texts
+          },
+          {
+            headers: {
+              'Authorization': `Bearer ${this.apiKey}`,
+              'Content-Type': 'application/json'
+            },
+            timeout: this.timeout
+          }
+        );
+        
+        return response.data.data.map((item: any) => item.embedding);
+      } catch (error: any) {
+        attempt++;
+        
+        logger.warn('Error embedding batch', {
+          attempt,
+          error: error.message,
+          status: error.response?.status,
         });
-
-        const embeddings = response.data.map(item => item.embedding);
-        allEmbeddings.push(...embeddings);
+        
+        if (attempt >= this.maxRetries) {
+          throw new EmbeddingError(`Failed to embed texts after ${this.maxRetries} attempts: ${error.message}`, { cause: error });
+        }
+        
+        // Wait before retry with exponential backoff
+        await new Promise(resolve => setTimeout(resolve, 1000 * (2 ** attempt)));
       }
-
-      return allEmbeddings;
-    } catch (error: any) {
-      logger.error('Error creating embeddings for documents', {
-        error: error.message,
-      });
-
-      throw error;
     }
+    
+    throw new EmbeddingError('Failed to embed texts - max retries exceeded');
   }
 }

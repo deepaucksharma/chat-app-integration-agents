@@ -12,6 +12,13 @@
     "isolatedModules": true,
     "jsx": "preserve",
     "incremental": true,
+    "baseUrl": ".",
+    "paths": {
+      "@core/*": ["apps/core/src/*"],
+      "@infrastructure/*": ["apps/infrastructure/src/*"],
+      "@app/*": ["apps/app/src/*"],
+      "@agents/*": ["apps/agents/src/*"]
+    },
     "plugins": [
       {
         "name": "next"

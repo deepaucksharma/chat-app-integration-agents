@@ -53,6 +53,6 @@ export interface VerificationResult {
 
 export interface Executor {
   executeScript(container: Container, script: string, timeout?: number): Promise<ExecutionResult>;
-  verifyInstallation(container: Container, checks: VerificationCheck[]): Promise<VerificationResult>;
+  verifyInstallation(container: Container, integration: string, verificationScript: string): Promise<{ success: boolean; output: string; }>;
   executeRollback(container: Container, script: string): Promise<boolean>;
 }

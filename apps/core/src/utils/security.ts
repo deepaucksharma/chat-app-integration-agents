@@ -1,71 +1,101 @@
-import * as crypto from 'crypto';
+import { exec } from 'child_process';
+import { promisify } from 'util';
+import { ValidationError } from './error-handling';
+import { logger } from './logging';
 
-export function maskSensitiveData(
-  text: string, 
-  sensitiveKeys: string[] = ['license_key', 'api_key', 'token', 'password', 'secret']
-): string {
+const execAsync = promisify(exec);
+
+// Regular expressions for sensitive data
+const SENSITIVE_PATTERNS = [
+  /(?:API[_\s]?KEY|APIKEY|api[_\s]?key)['"]?\s*[:=]\s*['"]?([^'"]+?)['"]?(?:[,\s]|$)/gi,
+  /(?:PASSWORD|password|PASS|pass)['"]?\s*[:=]\s*['"]?([^'"]+?)['"]?(?:[,\s]|$)/gi,
+  /(?:SECRET|secret)['"]?\s*[:=]\s*['"]?([^'"]+?)['"]?(?:[,\s]|$)/gi,
+  /(?:TOKEN|token)['"]?\s*[:=]\s*['"]?([^'"]+?)['"]?(?:[,\s]|$)/gi,
+  /(?:KEY|key)['"]?\s*[:=]\s*['"]?([^'"]+?)['"]?(?:[,\s]|$)/gi,
+  /(?:ACCESS[_\s]?KEY|access[_\s]?key)['"]?\s*[:=]\s*['"]?([^'"]+?)['"]?(?:[,\s]|$)/gi,
+  /LICENSE[_\s]?KEY=['"]([^'"]+)['"]/gi
+];
+
+/**
+ * Mask sensitive data in text
+ */
+export function maskSensitiveData(text: string): string {
   if (!text) return text;
   
   let maskedText = text;
   
-  // Mask sensitive keys
-  for (const key of sensitiveKeys) {
-    // Mask key-value patterns
-    const pattern = new RegExp(`(${key}["'=:]{1,3})[^\\s"']+(['"\\s]|$)`, 'gi');
-    maskedText = maskedText.replace(pattern, '$1***$2');
-    
-    // Mask export patterns
-    const exportPattern = new RegExp(`(\\b(?:set|export)\\s+${key}\\s*[=:]\\s*)[^\\s;]+([;'"\\s]|$)`, 'gi');
-    maskedText = maskedText.replace(exportPattern, '$1***$2');
-  }
+  // Replace each sensitive pattern with a mask
+  SENSITIVE_PATTERNS.forEach(pattern => {
+    maskedText = maskedText.replace(pattern, (match, p1) => {
+      if (!p1) return match;
+      
+      // Keep first and last character, mask the rest
+      const firstChar = p1.charAt(0);
+      const lastChar = p1.charAt(p1.length - 1);
+      const maskLength = Math.max(p1.length - 2, 0);
+      const mask = '*'.repeat(maskLength);
+      
+      return match.replace(p1, `${firstChar}${mask}${lastChar}`);
+    });
+  });
   
   return maskedText;
 }
 
-export function generateSecureId(length: number = 16): string {
-  return crypto.randomBytes(length).toString('hex');
-}
-
+/**
+ * Validate integration name to prevent command injection
+ */
 export function validateIntegrationName(name: string): boolean {
-  // Allow only alphanumeric characters, dashes, and underscores
-  return /^[a-zA-Z0-9_-]+$/.test(name);
+  // Allow only alphanumeric characters, hyphens, and underscores
+  const validPattern = /^[a-zA-Z0-9_-]+$/;
+  return validPattern.test(name);
 }
 
-export function scanScriptForVulnerabilities(script: string): {
-  valid: boolean; 
-  issues: { severity: 'low' | 'medium' | 'high' | 'critical'; message: string }[]
-} {
-  const issues = [];
-  
-  // Check for potentially dangerous patterns
-  const dangerousPatterns = [
-    { pattern: /rm\s+(-r|-f|--force|--recursive)\s+\//, severity: 'critical', message: "Dangerous command: Remove from root directory" },
-    { pattern: /dd\s+if=.*\s+of=\/dev\/([a-z]+)/, severity: 'critical', message: "Dangerous command: Writing to block device" },
-    { pattern: /:(){ :|:& };:/g, severity: 'critical', message: "Dangerous command: Fork bomb detected" },
-    { pattern: /wget.+\|\s*sh/, severity: 'high', message: "Dangerous command: Piping download directly to shell" },
-    { pattern: /curl.+\|\s*sh/, severity: 'high', message: "Dangerous command: Piping download directly to shell" },
-  ];
-  
-  for (const { pattern, severity, message } of dangerousPatterns) {
-    if (pattern.test(script)) {
-          issues.push({ severity: severity as 'low' | 'medium' | 'high' | 'critical', message });
-        }
+/**
+ * Scan a shell script for potential vulnerabilities using shellcheck
+ */
+export async function scanScriptForVulnerabilities(
+  script: string
+): Promise<{ valid: boolean; issues: string[] }> {
+  try {
+    // Check if shellcheck is installed
+    await execAsync('which shellcheck');
+  } catch (error) {
+    logger.warn('shellcheck not found, skipping script vulnerability scan');
+    return { valid: true, issues: ['shellcheck not found, scan skipped'] };
   }
   
-  // Check for credentials in script
-  const credentialPatterns = [
-    { pattern: /([a-z0-9]{40})/i, severity: 'medium', message: "Possible API key or token in script" },
-    { pattern: /(password|passwd|pwd)=(["'])(?!\*\*\*)([^'"]{4,})/, severity: 'medium', message: "Password found in script" }
-  ];
-  
-  for (const { pattern, severity, message } of credentialPatterns) {
-    if (pattern.test(script)) {
-          issues.push({ severity: severity as 'low' | 'medium' | 'high' | 'critical', message });
-        }
+  try {
+    // Create a temporary file with the script
+    const tempFile = `/tmp/script_${Date.now()}.sh`;
+    await promisify(require('fs').writeFile)(tempFile, script);
+    
+    // Run shellcheck with severity info
+    const { stdout, stderr } = await execAsync(`shellcheck -f json ${tempFile}`);
+    
+    // Clean up temporary file
+    await promisify(require('fs').unlink)(tempFile);
+    
+    if (stderr) {
+      throw new Error(stderr);
+    }
+    
+    // Parse shellcheck output
+    const issues = JSON.parse(stdout);
+    
+    // Determine validity based on issue levels
+    // Consider the script invalid if there are any error-level issues
+    const hasErrors = issues.some((issue: any) => issue.level === 'error');
+    
+    return {
+      valid: !hasErrors,
+      issues: issues.map((issue: any) => `Line ${issue.line}: ${issue.message} [${issue.level}]`)
+    };
+  } catch (error: any) {
+    logger.error('Error scanning script for vulnerabilities', { 
+      error: error.message 
+    });
+    
+    throw new ValidationError(`Failed to scan script: ${error.message}`, { cause: error });
   }
-  
-  // Consider script safe if no critical issues
-  const valid = !issues.some(issue => issue.severity === 'critical');
-  
-  return { valid, issues };
 }

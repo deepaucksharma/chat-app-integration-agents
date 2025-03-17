@@ -1,83 +1,112 @@
-import { logger } from './logging';
-
+// Custom error classes
 export class IntegrationError extends Error {
-  constructor(
-    message: string,
-    public readonly code: string,
-    public readonly details?: Record<string, any>
-  ) {
-    super(message);
+  constructor(message: string, options?: { cause?: unknown }) {
+    super(message, options?.cause as Error);
     this.name = 'IntegrationError';
   }
 }
 
-export class ResourceError extends IntegrationError {
-  constructor(message: string, details?: Record<string, any>) {
-    super(message, 'RESOURCE_ERROR', details);
-    this.name = 'ResourceError';
+export class RetrievalError extends IntegrationError {
+  constructor(message: string, options?: { cause?: unknown }) {
+    super(message, options?.cause as Error);
+    this.name = 'RetrievalError';
   }
 }
 
-export class ScriptGenerationError extends IntegrationError {
-  constructor(message: string, details?: Record<string, any>) {
-    super(message, 'SCRIPT_GENERATION_ERROR', details);
-    this.name = 'ScriptGenerationError';
+export class DocumentationError extends IntegrationError {
+  constructor(message: string, options?: { cause?: unknown }) {
+    super(message, options?.cause as Error);
+    this.name = 'DocumentationError';
   }
 }
 
-export class ExecutionError extends IntegrationError {
-  constructor(message: string, details?: Record<string, any>) {
-    super(message, 'EXECUTION_ERROR', details);
-    this.name = 'ExecutionError';
+export class DocumentationSearchError extends DocumentationError {
+  constructor(message: string, options?: { cause?: unknown }) {
+    super(message, options?.cause as Error);
+    this.name = 'DocumentationSearchError';
+  }
+}
+
+export class DocumentationExtractionError extends DocumentationError {
+  constructor(message: string, options?: { cause?: unknown }) {
+    super(message, options?.cause as Error);
+    this.name = 'DocumentationExtractionError';
   }
 }
 
 export class ValidationError extends IntegrationError {
-  constructor(message: string, details?: Record<string, any>) {
-    super(message, 'VALIDATION_ERROR', details);
+  constructor(message: string, options?: { cause?: unknown }) {
+    super(message, options?.cause as Error);
     this.name = 'ValidationError';
   }
 }
 
+export class ContainerError extends IntegrationError {
+  constructor(message: string, options?: { cause?: unknown }) {
+    super(message, options?.cause as Error);
+    this.name = 'ContainerError';
+  }
+}
+
+export class ExecutionError extends IntegrationError {
+  constructor(message: string, options?: { cause?: unknown }) {
+    super(message, options?.cause as Error);
+    this.name = 'ExecutionError';
+  }
+}
+
+export class ScriptGenerationError extends IntegrationError {
+  constructor(message: string, options?: { cause?: unknown }) {
+    super(message, options?.cause as Error);
+    this.name = 'ScriptGenerationError';
+  }
+}
+
+export class EmbeddingError extends IntegrationError {
+  constructor(message: string, options?: { cause?: unknown }) {
+    super(message, options?.cause as Error);
+    this.name = 'EmbeddingError';
+  }
+}
+
+// Error handling utility function with retry
 export async function withErrorHandling<T>(
   operation: () => Promise<T>,
   options: {
-    retries?: number;
-    retryDelay?: number;
-    rollback?: () => Promise<void>;
-    errorHandler?: (error: Error) => Promise<void>;
+    retries?: number,
+    retryDelay?: number,
+    onError?: (error: Error, attempt: number) => void,
+    onRetry?: (attempt: number) => void,
+    onSuccess?: (result: T) => void,
   } = {}
 ): Promise<T> {
-  const { retries = 0, retryDelay = 1000, rollback, errorHandler } = options;
-  
-  let lastError: Error | null = null;
+  const {
+    retries = 3,
+    retryDelay = 1000,
+    onError,
+    onRetry,
+    onSuccess
+  } = options;
+
+  let lastError: Error | undefined;
   
   for (let attempt = 0; attempt <= retries; attempt++) {
     try {
-      return await operation();
-    } catch (error: any) {
-      lastError = error;
+      const result = await operation();
+      onSuccess?.(result);
+      return result;
+    } catch (error) {
+      lastError = error instanceof Error ? error : new Error(String(error));
       
-      if (errorHandler) {
-        await errorHandler(error);
-      }
+      onError?.(lastError, attempt);
       
       if (attempt < retries) {
-        await new Promise(resolve => setTimeout(resolve, retryDelay));
+        // Wait before retry
+        await new Promise(resolve => setTimeout(resolve, retryDelay * (2 ** attempt)));
+        onRetry?.(attempt + 1);
       }
     }
   }
   
-  // All retries failed
-  if (rollback) {
-    try {
-      await rollback();
-    } catch (rollbackError) {
-      logger.error('Rollback failed', { 
-        error: rollbackError 
-      });
-    }
-  }
-  
-  throw lastError;
+  throw lastError || new Error('Operation failed');
 }

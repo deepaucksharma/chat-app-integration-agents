@@ -1,4 +1,4 @@
 export interface EmbeddingsProvider {
-  embedQuery(query: string): Promise<number[]>;
-  embedDocuments(documents: string[]): Promise<number[][]>;
+  embedQuery(text: string): Promise<number[]>;
+  embedDocuments(texts: string[]): Promise<number[][]>;
 }

@@ -9,5 +9,4 @@ export interface ValidationResult {
 
 export interface ScriptGenerator {
   generateScript(integration: string, operation: string, params: Record<string, any>): Promise<string>;
-  validateScript(script: string): ValidationResult;
 }

@@ -10,7 +10,7 @@ import { UninstallationController } from './controllers/uninstallation';
 import { ResearchController } from './controllers/research';
 import { AsyncInstallationController } from './controllers/async-installation';
 import { ConfigManager } from '@core/config/manager';
-import { logger } from '@core/utils/logging';
+import { logger, setLogLevel } from '@core/utils/logging';
 import { createCli } from './cli';
 
 async function main() {
@@ -21,29 +21,41 @@ async function main() {
     const configManager = new ConfigManager();
     const appConfig = await configManager.load();
     
+    // Set log level based on configuration
+    if (appConfig.logLevel) {
+      setLogLevel(appConfig.logLevel);
+    }
+    
     // Initialize core components
     const elasticClient = new Client({
       node: appConfig.elasticsearch?.url || 'http://localhost:9200',
-      auth: {
-        username: appConfig.elasticsearch?.username,
-        password: appConfig.elasticsearch?.password
-      }
+      auth: appConfig.elasticsearch?.apiKey 
+        ? { apiKey: appConfig.elasticsearch.apiKey }
+        : { 
+            username: appConfig.elasticsearch?.username || 'elastic',
+            password: appConfig.elasticsearch?.password || 'changeme'
+          }
     });
     
-    const embeddingsProvider = new OpenAIEmbeddingsProvider(
-      appConfig.embeddings?.model || 'text-embedding-3-small'
-    );
+    const embeddingsProvider = new OpenAIEmbeddingsProvider({
+      model: appConfig.embeddings?.model || 'text-embedding-3-small',
+      apiKey: appConfig.embeddings?.apiKey || process.env.OPENAI_API_KEY
+    });
     
     const retriever = new ElasticRetriever(
       elasticClient,
       embeddingsProvider,
-      { indexName: appConfig.elasticsearch?.index || 'newrelic_docs' }
+      { 
+        indexName: appConfig.elasticsearch?.index || 'newrelic_docs',
+        dimensions: 1536
+      }
     );
     
     const docProvider = new WebDocumentationProvider({
-      baseUrl: appConfig.documentation?.baseUrl,
-      cacheDir: appConfig.documentation?.cacheDir,
-      cacheTtl: appConfig.documentation?.cacheTtl
+      baseUrl: appConfig.documentation?.baseUrl || 'https://docs.newrelic.com',
+      cacheDir: appConfig.documentation?.cacheDir || './cache/docs',
+      cacheTtl: appConfig.documentation?.cacheTtl || 86400,
+      maxCacheSize: appConfig.documentation?.maxCacheSize || 100
     });
     
     // Initialize infrastructure components
@@ -51,14 +63,18 @@ async function main() {
       maxPoolSize: appConfig.docker?.poolSize || 5
     });
     
-    const executor = new DockerExecutor({
-      scriptDir: appConfig.execution?.scriptDir
+    const scriptGenerator = new TemplateScriptGenerator({
+      templatesDir: appConfig.templates?.dir || './templates',
+      cacheSize: appConfig.templates?.cacheSize || 100
     });
     
-    const scriptGenerator = new TemplateScriptGenerator({
-      templatesDir: appConfig.templates?.dir,
-      cacheSize: appConfig.templates?.cacheSize
-    });
+    const executor = new DockerExecutor(
+      containerProvider,
+      {
+        scriptDir: appConfig.execution?.scriptDir || './scripts',
+        defaultTimeout: appConfig.execution?.timeout || 300
+      }
+    );
     
     // Initialize controllers
     const installationController = new InstallationController(
