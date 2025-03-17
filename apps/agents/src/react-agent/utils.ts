@@ -1,4 +1,5 @@
 import { initChatModel } from "langchain/chat_models/universal";
+import { ChatGoogleGenerativeAI } from "@langchain/google-genai";
 
 /**
  * Load a chat model from a fully specified name.
@@ -13,6 +14,13 @@ export async function loadChatModel(fullySpecifiedName: string) {
   } else {
     const provider = fullySpecifiedName.slice(0, index);
     const model = fullySpecifiedName.slice(index + 1);
-    return await initChatModel(model, { modelProvider: provider });
+    if (provider === "google") {
+      return new ChatGoogleGenerativeAI({
+        apiKey: process.env.GOOGLE_API_KEY,
+        modelName: model,
+      });
+    } else {
+      return await initChatModel(model, { modelProvider: provider });
+    }
   }
 }
