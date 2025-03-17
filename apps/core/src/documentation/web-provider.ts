@@ -103,14 +103,14 @@ export class WebDocumentationProvider implements DocumentationProvider {
   async searchDocumentation(
     integration: string,
     query: string
-  ): Promise<Array<{ title: string, content: string, url: string }>> {
-    try {
-      // Note: In a real implementation, this would use a vector store retriever
-      // This is a simple implementation for demonstration purposes
-      
-      // For now, just return an empty array
-      logger.debug('Documentation search requested', { query });
-      return [];
+  ): Promise<Array<{ title: string, pageContent: string, url: string }>> {
+      try {
+        // Note: In a real implementation, this would use a vector store retriever
+        // This is a simple implementation for demonstration purposes
+  
+        // For now, just return an empty array
+        logger.debug('Documentation search requested', { query });
+        return [];
     } catch (error: any) {
       logger.error('Error searching documentation', {
         query,

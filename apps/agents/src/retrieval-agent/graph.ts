@@ -35,7 +35,7 @@ async function generateQuery(
       ...state.messages,
     ];
     const model = (
-      await loadChatModel(configuration.responseModel)
+      await loadChatModel(configuration.queryModel)
     ).withStructuredOutput(SearchQuery);
 
     const generated = await model.invoke(messageValue);

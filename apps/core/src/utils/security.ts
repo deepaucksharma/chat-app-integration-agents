@@ -44,11 +44,32 @@ export function maskSensitiveData(text: string): string {
 
 /**
  * Validate integration name to prevent command injection
+ * 
+ * @param name The integration name to validate
+ * @returns Boolean indicating if the name is valid
  */
 export function validateIntegrationName(name: string): boolean {
   // Allow only alphanumeric characters, hyphens, and underscores
+  // Restricting to a safer subset of characters to prevent command injection
   const validPattern = /^[a-zA-Z0-9_-]+$/;
+  
+  // Additional safety checks
+  if (!name || name.length > 50) {
+    return false;
+  }
+  
   return validPattern.test(name);
+}
+
+/**
+ * Safely escape a string for use in shell commands
+ * 
+ * @param input The string to escape
+ * @returns Escaped string safe for shell command usage
+ */
+export function escapeShellArg(input: string): string {
+  // Replace ' with '\''
+  return `'${input.replace(/'/g, "'\\''")}'`;
 }
 
 /**
@@ -66,6 +87,11 @@ export async function scanScriptForVulnerabilities(
   }
   
   try {
+    // Set a maximum size for scripts to scan
+    if (script.length > 1000000) { // 1MB limit
+      throw new Error('Script is too large to scan');
+    }
+    
     // Create a temporary file with the script
     const tempFile = `/tmp/script_${Date.now()}.sh`;
     await promisify(require('fs').writeFile)(tempFile, script);
@@ -82,6 +108,14 @@ export async function scanScriptForVulnerabilities(
     
     // Parse shellcheck output
     const issues = JSON.parse(stdout);
+    
+    // Log detailed vulnerability information
+    if (issues.length > 0) {
+      logger.warn('Script vulnerability scan found issues', { 
+        issueCount: issues.length,
+        issues: issues.map((i: any) => ({ line: i.line, level: i.level, message: i.message }))
+      });
+    }
     
     // Determine validity based on issue levels
     // Consider the script invalid if there are any error-level issues

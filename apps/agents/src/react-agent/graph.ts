@@ -8,8 +8,6 @@ import { TOOLS } from "./tools.js";
 import { loadChatModel } from "./utils.js";
 import * as googleVertexAI from "@langchain/google-vertexai";
 
-console.log("googleVertexAI:", googleVertexAI);
-
 // Define the function that calls the model
 async function callModel(
   state: typeof MessagesAnnotation.State,

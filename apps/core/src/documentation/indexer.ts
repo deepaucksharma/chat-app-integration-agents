@@ -29,7 +29,7 @@ export class DocumentationIndexer {
       // Prepare documents
       const documents: Document[] = chunks.map((chunk, index) => ({
         id: `${integration}-${index}`,
-        content: chunk,
+        pageContent: chunk,
         metadata: {
           integration,
           index,
@@ -66,7 +66,7 @@ export class DocumentationIndexer {
       if (!trimmedParagraph) continue;
 
       // If adding this paragraph would exceed chunk size, start a new chunk
-      if (currentChunk &amp;&amp; (currentChunk.length + trimmedParagraph.length > chunkSize)) {
+      if (currentChunk && (currentChunk.length + trimmedParagraph.length > chunkSize)) {
         chunks.push(currentChunk);
         currentChunk = trimmedParagraph;
       } else {

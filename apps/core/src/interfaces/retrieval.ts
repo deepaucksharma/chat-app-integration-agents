@@ -1,6 +1,6 @@
 export interface Document {
   id?: string;
-  content: string;
+  pageContent: string;
   metadata?: Record<string, any>;
 }
 

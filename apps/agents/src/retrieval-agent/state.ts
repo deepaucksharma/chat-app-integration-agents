@@ -24,11 +24,15 @@ export function reduceDocs(
   if (newDocs === "delete") {
     return [];
   }
+  
+  const existingDocs = existing || [];
+  
   // Supports adding a single string document
   if (typeof newDocs === "string") {
     const docId = uuidv4();
-    return [{ pageContent: newDocs, metadata: { id: docId }, id: docId }];
+    return [...existingDocs, { pageContent: newDocs, metadata: { id: docId } }];
   }
+  
   // User can provide "docs" content in a few different ways
   if (Array.isArray(newDocs)) {
     const coerced: Document[] = [];
@@ -46,10 +50,11 @@ export function reduceDocs(
         coerced.push(doc);
       }
     }
-    return coerced;
+    return [...existingDocs, ...coerced];
   }
+  
   // Returns existing documents if no valid update is provided
-  return existing || [];
+  return existingDocs;
 }
 
 /**
